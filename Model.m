@@ -7,13 +7,31 @@ classdef Model < handle
         simsExact
     end
     methods (Access = private)
-        
+
         % Utility function
         function utils = utility(obj, cons)
             if (obj.env.gamma == 1)
                 utils = log(cons);
             else
-                utils = cons^(1 - obj.env.gamma) ./ (1 - obj.env.gamma);
+                utils = (cons.^(1 - obj.env.gamma)) ./ (1 - obj.env.gamma);
+            end
+        end
+        
+        % Marginal utility function
+        function margUtils = marginalUtility(obj, cons)
+            if (obj.env.gamma == 1)
+                margUtils = 1 ./ cons;
+            else
+                margUtils = cons.^(-obj.env.gamma);
+            end
+        end
+        
+        % Inverse marginal utility function
+        function invMargUtils = inverseMarginalUtility(obj, margUtils)
+            if (obj.env.gamma == 1)
+                invMargUtils = 1 ./ margUtils;
+            else
+                invMargUtils = margUtils.^(-1/obj.env.gamma);
             end
         end
         
@@ -26,7 +44,16 @@ classdef Model < handle
             value = utility(obj, cons) + (obj.env.beta * VA1);
             value = -value;
         end
-    
+
+        % Function for solving the Euler equation
+        % Interpolates inverse marginal utility because this is linear
+        function eulerDiff = eulerDifference(obj, ixt, A0, A1)
+            invMargUtilAtA1 = interp1(obj.env.Agrid(ixt+1, :), inverseMarginalUtility(obj, obj.sln.margUtil(ixt+1, :)), A1, obj.env.interpMethod, 'extrap');
+            margUtilAtA1 = marginalUtility(obj, invMargUtilAtA1);
+            cons = A0 - (A1 ./ (1 + obj.env.r));
+            eulerDiff = marginalUtility(obj, cons) - (obj.env.beta * (1 + obj.env.r) * margUtilAtA1);
+        end
+        
     end
     methods (Access = public)
         
@@ -39,9 +66,31 @@ classdef Model < handle
             obj.env.beta = 1/(1+obj.env.r);
             obj.env.gamma = 1.5;
             obj.env.startA = 1;
-            obj.env.numPointsA = 100;
+            obj.env.numPointsA = 20;
             obj.env.interpMethod = 'pchip';  % Previously I had 'linear' but this gave very misleading simulations
             obj.env.Agrid = obj.AgridInit();
+            obj.env.solveUsingEuler = 0;
+        end
+        
+        % Function to initialise either to solve using Euler equation or
+        % using Value function
+        function eulerInit(obj, solveUsingEuler)
+            if (solveUsingEuler == 1)
+                obj.env.solveUsingEuler = 1;
+                obj.env.numpointsA = 10;
+                % Note: setting interpMethod to 'linear' means that linear
+                % interpolation is used both for linearised marginal
+                % utility in the solution of the Euler equation and in
+                % finding the value that corresponds to that solution. The
+                % latter is a very poor approximation, but it doesn't
+                % matter because we don't use the value function in any of
+                % the solution
+                obj.env.interpMethod = 'linear';
+            else
+                obj.env.solveUsingEuler = 0;
+                obj.env.numpointsA = 20;
+                obj.env.interpMethod = 'pchip';
+            end
         end
         
         % Function to populate asset grid
@@ -76,6 +125,16 @@ classdef Model < handle
 
         % main solution function
         function solve(obj)
+            if (obj.env.solveUsingEuler)
+                solveUsingEuler(obj)
+            else
+                solveUsingValue(obj)
+            end
+        end
+        
+        % Solution maximising the value function rather than solving Euler
+        % equation
+        function solveUsingValue(obj)
             
             % Set terminal value function to zero
             obj.sln.value(obj.env.T+1, 1:obj.env.numPointsA) = 0;
@@ -100,14 +159,61 @@ classdef Model < handle
                     obj.sln.value(ixt, ixA) = -negV;
                     obj.sln.policyA1(ixt, ixA) = A1;
                     obj.sln.policyC(ixt, ixA) = A0 - A1/(1 + obj.env.r);
+                    obj.sln.margUtil(ixt, ixA) = marginalUtility(obj, obj.sln.policyC(ixt, ixA));
                     
                 end % ixA
                 
             end % ixt
         end
-       
+        
+        % Solution function based on Euler equation
+        function solveUsingEuler(obj)
+
+            % Set terminal (T+1) value function to zero
+            obj.sln.value(obj.env.T+1, 1:obj.env.numPointsA) = 0;
+            
+            % Solve problem at T
+            obj.sln.policyC(obj.env.T, :) = obj.env.Agrid(obj.env.T, :);
+            obj.sln.policyA1(obj.env.T, :) = zeros(1, obj.env.numPointsA);
+            obj.sln.value(obj.env.T, :) = utility(obj, obj.sln.policyC(obj.env.T, :));
+            obj.sln.margUtil(obj.env.T, :) = marginalUtility(obj, obj.sln.policyC(obj.env.T, :));
+            
+            % Solve problem at T-1 back to 1
+            for ixt = (obj.env.T-1):-1:1
+                
+                % Loop across asset grid points
+                for ixA = 1:1:obj.env.numPointsA
+                    
+                    % Information for optimisation
+                    A0 = obj.env.Agrid(ixt, ixA);
+                    lbA1 = obj.env.Agrid(ixt + 1, 1);
+                    ubA1 = (A0 - obj.env.minCons)*(1 + obj.env.r);
+                    
+                    % Compute solution
+                    lbSign = sign(eulerDifference(obj, ixt, A0, lbA1));
+                    % If liquidity constrained
+                    if ((lbSign == 1) || (ubA1 - lbA1 < obj.env.tol))
+                        obj.sln.policyA1(ixt, ixA) = lbA1;
+                    else
+                        ubSign = sign(eulerDifference(obj, ixt, A0, ubA1));
+                        if (lbSign*ubSign == 1)
+                            error('Sign of Euler difference at lower bound and upper bound are the same. No solution to Euler equation');
+                        end
+                        obj.sln.policyA1(ixt, ixA) = fzero(@(A1) eulerDifference(obj, ixt, A0, A1), [lbA1, ubA1], optimset('TolX', obj.env.tol));
+                    end
+                    
+                    % Store solution
+                    obj.sln.policyC(ixt, ixA) = A0 - (obj.sln.policyA1(ixt, ixA) / (1 + obj.env.r));
+                    obj.sln.value(ixt, ixA) = -objectiveFunc(obj, ixt, A0, obj.sln.policyA1(ixt, ixA));
+                    obj.sln.margUtil(ixt, ixA) = marginalUtility(obj, obj.sln.policyC(ixt, ixA));
+                    
+                end
+                
+            end
+        
+        end
+        
         % Analytical policy functions
-        % This is just copying Cormac's code
         function solveExact(obj)
             
             alpha = (obj.env.beta^(1/obj.env.gamma))*((1+obj.env.r)^((1-obj.env.gamma)/obj.env.gamma));
@@ -134,6 +240,9 @@ classdef Model < handle
                         obj.slnExact.value(ixt, ixA) = obj.slnExact.value(ixt, ixA) + (discountFac*utility(obj, futureCons));
                     end
                     
+                    % Calculate exact marginal utility
+                    obj.slnExact.margUtil(ixt, ixA) = marginalUtility(obj, obj.slnExact.policyC(ixt, ixA));
+                    
                     % Calculate exact next-period assets policy function
                     obj.slnExact.policyA1(ixt, ixA) = (1 + obj.env.r) * (obj.env.Agrid(ixt, ixA) - obj.slnExact.policyC(ixt, ixA));
                     
@@ -152,6 +261,7 @@ classdef Model < handle
                 obj.sims.v(t, 1) = interp1(obj.env.Agrid(t, :), obj.sln.value(t, :), obj.sims.a(t, 1), obj.env.interpMethod, 'extrap');
                 obj.sims.a(t+1, 1) = interp1(obj.env.Agrid(t, :), obj.sln.policyA1(t, :), obj.sims.a(t, 1), obj.env.interpMethod, 'extrap');
                 obj.sims.c(t, 1) = obj.sims.a(t, 1) - (obj.sims.a(t+1, 1) / (1 + obj.env.r));
+                obj.sims.du(t, 1) = marginalUtility(obj, obj.sims.c(t, 1));
             end
             
         end
@@ -164,6 +274,7 @@ classdef Model < handle
             
             for t = 1:1:obj.env.T
                 obj.simsExact.c(t, 1) = obj.simsExact.a(t, 1) * (1 - alpha) / (1 - alpha^(obj.env.T - t + 1));
+                obj.simsExact.du(t, 1) = marginalUtility(obj, obj.simsExact.c(t, 1));
                 obj.simsExact.a(t+1, 1) = (obj.simsExact.a(t, 1) - obj.simsExact.c(t, 1)) * (1 + obj.env.r);
             end
             obj.simsExact.v(obj.env.T, 1) = utility(obj, obj.simsExact.c(obj.env.T, 1));
@@ -177,65 +288,78 @@ classdef Model < handle
         % Plot analytical and numerical consumption policy functions
         function plotPolicyC(obj, year)
             figure(1)
-            plot(obj.env.Agrid(year, :), obj.sln.policyC(year, :), 'r', 'LineWidth', 2)
-            hold on;
             plot(obj.env.Agrid(year, :), obj.slnExact.policyC(year, :), 'g', 'LineWidth', 2)
+            hold on;
+            plot(obj.env.Agrid(year, :), obj.sln.policyC(year, :), 'r', 'LineWidth', 2)
             hold on;
             xlabel('Asset');
             ylabel('Policy (consumption)');
-            legend('Numerical','Analytical', 4);
+            legend('Analytical','Numerical', 4);
             title('Comparing numerical and analytical consumption functions')   
         end
         
         % Plot analytical and numerical next-period-asset policy functions
         function plotPolicyA1(obj, year)
             figure(2)
-            plot(obj.env.Agrid(year, :), obj.sln.policyA1(year, :), 'r', 'LineWidth', 2)
-            hold on;
             plot(obj.env.Agrid(year, :), obj.slnExact.policyA1(year, :), 'g', 'LineWidth', 2)
+            hold on;
+            plot(obj.env.Agrid(year, :), obj.sln.policyA1(year, :), 'r', 'LineWidth', 2)
             hold on;
             xlabel('Asset');
             ylabel('Policy (next-period assets)');
-            legend('Numerical','Analytical', 4);
+            legend('Analytical','Numerical', 4);
             title('Comparing numerical and analytical next-period assets functions')   
         end
 
         % Plot analytical and numerical value functions
         function plotValue(obj, year)
             figure(3)
-            plot(obj.env.Agrid(year, :), obj.sln.value(year, :), 'r', 'LineWidth', 2)
-            hold on;
             plot(obj.env.Agrid(year, :), obj.slnExact.value(year, :), 'g', 'LineWidth', 2)
+            hold on;
+            plot(obj.env.Agrid(year, :), obj.sln.value(year, :), 'r', 'LineWidth', 2)
             hold on;
             xlabel('Asset');
             ylabel('Value function');
-            legend('Numerical','Analytical', 4);
+            legend('Analytical','Numerical', 4);
             title('Comparing numerical and analytical value functions')   
         end
-        
+
+        % Plot analytical and numerical marginal utility functions
+        function plotMargUtil(obj, year)
+            figure(4)
+            plot(obj.env.Agrid(year, :), obj.slnExact.margUtil(year, :), 'g', 'LineWidth', 2)
+            hold on;
+            plot(obj.env.Agrid(year, :), obj.sln.margUtil(year, :), 'r', 'LineWidth', 2)
+            hold on;
+            xlabel('Asset');
+            ylabel('Marginal utility function');
+            legend('Analytical','Numerical', 4);
+            title('Comparing numerical and analytical marginal utility functions')   
+        end
+
         % Plot consumption
         function plotCons(obj)
-            figure(4)
-            plot(obj.sims.c, 'r', 'linewidth',2)
-            hold on;
+            figure(5)
             plot(obj.simsExact.c, 'g', 'linewidth',2)
+            hold on;
+            plot(obj.sims.c, 'r', 'linewidth',2)
             hold on;
             xlabel('Age')
             ylabel('Consumption')
-            legend('Numerical','Analytical', 4);
+            legend('Analytical','Numerical', 4);
             title('Time path of consumption')
         end
         
         % Plot assets
         function plotAssets(obj)
-            figure(5)
-            plot(obj.sims.a, 'r', 'linewidth',2)
-            hold on;
+            figure(6)
             plot(obj.simsExact.a, 'g', 'linewidth',2)
+            hold on;
+            plot(obj.sims.a, 'r', 'linewidth',2)
             hold on;
             xlabel('Age')
             ylabel('Assets')
-            legend('Numerical','Analytical', 4);
+            legend('Analytical','Numerical', 4);
             title('Time path of assets')
         end
         
