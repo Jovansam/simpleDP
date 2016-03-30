@@ -92,10 +92,14 @@ classdef Model < handle
                     ubA1 = (A0 - obj.env.minCons)*(1 + obj.env.r);
                     
                     % Need to check that ubA1 > lbA1
-                    
-                    % Compute solution
-                    [A1, negV] = fminbnd(@(A1) objectiveFunc(obj, ixt, A0, A1), lbA1, ubA1, optimset('TolX', obj.env.tol));
-                    
+                    if (ubA1 - lbA1 < obj.env.tol)
+                        negV = objectiveFunc(obj, ixt, A0, lbA1);
+                        A1 = lbA1;
+                    else
+                        % Compute solution
+                        [A1, negV] = fminbnd(@(A1) objectiveFunc(obj, ixt, A0, A1), lbA1, ubA1, optimset('TolX', obj.env.tol));
+                    end
+                        
                     % Store solution
                     obj.sln.value(ixt, ixA) = -negV;
                     obj.sln.policyA1(ixt, ixA) = A1;
