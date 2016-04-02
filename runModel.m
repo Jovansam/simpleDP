@@ -38,18 +38,8 @@ model.plotAssets();
 toc;
 
 % Still to do:
-    % Add error checking
-    % Sort out graphing code (e.g. graph numbering, create graphs for
-    % simulated value and marginal utility)
-
-% To ask Cormac
-
-    % 1. Why does consumption jump up at the end of life in the value function
-    % solution?
-    % 2. Why is the value function more accurately calculated in the value
-    % function solution than the Euler solution?
-    % 3. What is the reason for the ubA1 - lbA1 < minCons condition in the
-    % solveEulerEquation function?
+    % Why is the solution based on maximising the value function so bad? It
+    % must be because the value function approximation is bad
 
 % Discoveries
     
@@ -65,10 +55,17 @@ toc;
     % the state. It is the job of the objective function to deal with
     % interpolation etc
     
-    % If the assets grid is set so that the lowest each year is the
-    % amount of assets that will guarantee minimal consumption in every
-    % future year, then an individual on that lower bound effectively has
-    % no choice over consumption: he must choose minimal consumption. Any
-    % more than that would violate minimal assets next period, any less
-    % than that would violate the minimal consumption constraint this
-    % period
+    % If the assets grid is set so that the lowest each year is the amount
+    % of assets that will guarantee minimal consumption in every future
+    % year and there is no income, then an individual on that lower bound
+    % effectively has no choice over consumption: he must choose minimal
+    % consumption. Any more than that would violate minimal assets next
+    % period, any less than that would violate the minimal consumption
+    % constraint this period
+    
+    % It is possible to store the policy function in the model solution to
+    % remove the need to calculate the optimal policy again in the
+    % simulation
+    
+    % The positioning of the assets grid points can matter a LOT when the
+    % solution is not exact
