@@ -133,7 +133,7 @@ classdef Model < handle
             % Maximum assets
             obj.env.Agrid(1, obj.env.numPointsA) = obj.env.startA;
             for ixt = 2:obj.env.T+1
-                obj.env.Agrid(ixt, obj.env.numPointsA) = (obj.env.Agrid(ixt-1, obj.env.numPointsA) + obj.env.Ymin(ixt-1,1) - obj.env.minCons)*(1 + obj.env.r);
+                obj.env.Agrid(ixt, obj.env.numPointsA) = (obj.env.Agrid(ixt-1, obj.env.numPointsA) + obj.env.Ymax(ixt-1,1) - obj.env.minCons)*(1 + obj.env.r);
             end
             
             % Minimum assets (including imposing borrowing constraint)
