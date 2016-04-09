@@ -73,6 +73,10 @@ classdef Model < handle
             obj.env.startA = 0;
             obj.env.numPointsA = 20;
             obj.env.interpMethod = 'pchip';     % Previously I had 'linear' but this gave very misleading simulations
+            obj.env.isUncertainty = 1;
+            obj.env.numPointsY = 2;
+            obj.env.hcIncome = [0.1, 0.9]';
+            obj.env.hcIncPDF = [0.5, 0.5]';
             obj.YgridInit();
             obj.env.borrowingAllowed = 1;
             obj.AgridInit();
@@ -102,9 +106,16 @@ classdef Model < handle
         
         % Function to populate income grid
         function YgridInit(obj)
-            obj.env.Ygrid = repmat(exp(obj.env.mu), obj.env.T, 1);
-            obj.env.Ymin = obj.env.Ygrid;
-            obj.env.Ymax = obj.env.Ygrid;
+            if (obj.env.isUncertainty == 0)
+                obj.env.Ygrid = repmat(exp(obj.env.mu), obj.env.T, 1);
+                obj.env.Ymin = obj.env.Ygrid;
+                obj.env.Ymax = obj.env.Ygrid;
+                obj.env.Q = 1;                  % Markov transition matrix
+            elseif (obj.env.isUncertainty == 1)
+                obj.env.Ygrid = repmat(obj.env.hcIncome', obj.env.T, 1);
+                obj.env.Ymin = min(obj.env.Ygrid, [], 2);
+                obj.env.Ymin = max(obj.env.Ygrid, [], 2);
+            end
             if (obj.env.tretire <= 0)
                 obj.env.Ygrid(:,:) = 0;
                 obj.env.Ymin(:,:) = 0;
