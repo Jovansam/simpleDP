@@ -70,10 +70,13 @@ classdef Model < handle
             obj.env.beta = 0.98;
             obj.env.gamma = 1.5;
             obj.env.mu = 0;                     % Log income
+            obj.env.rho = 0.75;
+            obj.env.sigma = 0.25;
+            obj.env.truncAt = 3;
             obj.env.startA = 0;
             obj.env.numPointsA = 20;
             obj.env.interpMethod = 'pchip';     % Previously I had 'linear' but this gave very misleading simulations
-            obj.env.numPointsY = 2;
+            obj.env.numPointsY = 8;
             obj.env.hcIncome = [0.1, 0.9]';
             obj.env.hcIncPDF = [0.5, 0.5]';
             obj.YgridInit();
@@ -105,7 +108,7 @@ classdef Model < handle
         end
         
         % Function to populate income grid
-        function YgridInit(obj)
+        function YgridInitOld(obj)
             obj.env.Ygrid = repmat(obj.env.hcIncome', obj.env.T, 1);
             obj.env.Ymin = min(obj.env.Ygrid, [], 2);
             obj.env.Ymax = max(obj.env.Ygrid, [], 2);
@@ -119,6 +122,79 @@ classdef Model < handle
                 obj.env.Ymin(obj.env.tretire:obj.env.T,:) = 0;
                 obj.env.Ymax(obj.env.tretire:obj.env.T,:) = 0;
             end
+        end
+        
+        % Function to populate income grid
+        function YgridInit(obj)
+            
+            % Process is lny = rho*lny_1 + (1-rho)*mu + epsilon
+            % Mean is mu (ignores the truncation points)
+            
+            % Find std dev (ignores the truncation points)
+            sigmalny = obj.env.sigma/((1-obj.env.rho^2)^0.5);
+            
+            % Find the N+1 boundary points and N expected values between
+            % these boundary points
+
+            % Initialise arrays
+            lnY = NaN(obj.env.numPointsY, 1);
+            lnYbounds = NaN(obj.env.numPointsY+1, 1);
+            
+            % Set lowest and highest bounds at truncation points
+            lnYbounds(1,1) = obj.env.mu - (obj.env.truncAt*sigmalny);
+            lnYbounds(obj.env.numPointsY+1, 1) = obj.env.mu + (obj.env.truncAt*sigmalny);
+            
+            % Find how much is excluded by truncation
+            probAtLB = normcdf(lnYbounds(1, 1), obj.env.mu, sigmalny);
+            probIn = normcdf(lnYbounds(obj.env.numPointsY+1, 1), obj.env.mu, sigmalny) - probAtLB;
+            
+            % Set the other bounds by splitting distribution into equal
+            % probability areas
+            for ixY = 2:1:obj.env.numPointsY
+                lnYbounds(ixY,1) = norminv(probAtLB + probIn*(ixY-1)/obj.env.numPointsY, obj.env.mu, sigmalny);
+            end
+
+            % Find the N expected values between the boundary points
+            % Calculate integral of x*pdf(x) between ixY_1 and ixY
+            % fun is rescaled by numPointsY/probIn because expected value
+            % is conditional on being in between lower and upper bounds
+            fun = @(x) x .* normpdf(x,obj.env.mu,sigmalny) .* obj.env.numPointsY ./ probIn;
+            for ixY = 1:1:obj.env.numPointsY
+                lnY(ixY,1) = integral(fun, lnYbounds(ixY,1), lnYbounds(ixY+1,1));
+            end
+
+            % Find the probability of transitioning between different
+            % ranges
+            obj.env.Q = NaN(obj.env.numPointsY, obj.env.numPointsY);
+            for ixi = 1:1:obj.env.numPointsY
+                for ixj = 1:1:obj.env.numPointsY
+                    minDraw = lnYbounds(ixj,1) - (1-obj.env.rho)*obj.env.mu - obj.env.rho*lnY(ixi,1);
+                    maxDraw = lnYbounds(ixj+1,1) - (1-obj.env.rho)*obj.env.mu - obj.env.rho*lnY(ixi,1);
+                    obj.env.Q(ixi,ixj) = normcdf(maxDraw/obj.env.sigma) - normcdf(minDraw/obj.env.sigma);
+                end
+                obj.env.Q(ixi,:) = obj.env.Q(ixi,:) ./ sum(obj.env.Q(ixi,:));
+            end
+            
+            % Convert log income into income
+            obj.env.Ygrid = repmat(exp(lnY'), obj.env.T, 1);
+            obj.env.Ymin = repmat(exp(lnYbounds(1,1)), obj.env.T, 1);
+            obj.env.Ymax = repmat(exp(lnYbounds(obj.env.numPointsY+1,1)), obj.env.T, 1);
+
+            % Deal with retirement
+            if (obj.env.tretire <= 0)
+                obj.env.Ygrid(:,:) = 0;
+                obj.env.Ymin(:,:) = 0;
+                obj.env.Ymax(:,:) = 0;
+            elseif ((obj.env.tretire > 0) && (obj.env.tretire <= obj.env.T))
+                obj.env.Ygrid(obj.env.tretire:obj.env.T,:) = 0;
+                obj.env.Ymin(obj.env.tretire:obj.env.T,:) = 0;
+                obj.env.Ymax(obj.env.tretire:obj.env.T,:) = 0;
+            end
+
+            if (min(obj.env.Ygrid(:,1)) < 1e-4) || (max(obj.env.Ygrid(:,numPointsY)) > 1e5)
+                warning('Combination of sigma and rho give a very high income variance. Numerical instability possible')
+            end
+
         end
         
         % Function to populate asset grid

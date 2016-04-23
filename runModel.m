@@ -8,6 +8,9 @@ model = Model;
 
 % Initialise environment
 model.envInit();
+
+return;
+
 useEuler = 1;
 model.eulerInit(useEuler);
 
@@ -41,8 +44,6 @@ toc;
 % Still to do:
     % Why is the solution based on maximising the value function so bad? It
     % must be because the value function approximation is bad
-    % Check that numPointsY = 1 if isUncertainty = 0
-    % Check it works if isUncertainty = 0
 
 % Discoveries
     
