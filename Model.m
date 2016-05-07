@@ -71,7 +71,7 @@ classdef Model < handle
             obj.env.gamma = 1.5;
             obj.env.mu = 0;                     % Log income
             obj.env.rho = 0.75;
-            obj.env.sigma = 0.0001;
+            obj.env.sigma = 0.25;
             obj.env.truncAt = 3;
             obj.env.startA = 0;
             obj.env.numPointsA = 8;
