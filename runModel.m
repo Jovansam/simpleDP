@@ -9,9 +9,7 @@ model = Model;
 % Initialise environment
 model.envInit();
 
-return;
-
-useEuler = 1;
+useEuler = 0;
 model.eulerInit(useEuler);
 
 % Solve model
@@ -25,7 +23,6 @@ model.plotValue(ixt);
 model.plotMargUtil(ixt);
 
 % Simulate model
-%%%%%%%%%%%%%%%%%% HERE %%%%%%%%%%%%%%%%%%%%%%%
 % Need to add routine to simulate under uncertainty that also works when
 % there is no uncertainty. Ideally then get rid of routine that simulates
 % under no uncertainty
@@ -42,8 +39,8 @@ model.plotAssets();
 toc;
 
 % Still to do:
-    % Why is the solution based on maximising the value function so bad? It
-    % must be because the value function approximation is bad
+    % Check Cormac's formula for EV between discrete lny points (using Adda
+    % and Cooper and Floden's code)
 
 % Discoveries
     
@@ -83,12 +80,26 @@ toc;
         % Is one better than the other? Were we to have a discrete decision
         % how would interpolating the policy function work?
     
+    % In going from a discrete income process to an AR(1) approximation,
+    % the main solution algorithm hardly has to change. The income grid and
+    % transition matrices do change but not the solution based on them
+    
+    % If you store the value function in the solution, you don't need a
+    % routine to calculate the objective in the simulation. Likewise for
+    % the marginal utility function and the Euler difference
+    
+    % If you use a Markov process to approximate and AR(1) you will
+    % inevitably be approximating outside the grid during the simulations
+    % because the lowest Ygrid value is higher than Ymin. This means you
+    % need to have an interpolation routine that will allow extrapolation
+        
     % Useful validation checks:
         % Solution vs exact solution
         % Value function solution vs Euler solution
         % How solution changes as number of grid points increases
         % Value and marginal utility are increasing in the right things
         % Value in last period equals utility (solution and simulation)
+        % Policy in last period is to consume everything
 
 % Questions
 

@@ -64,21 +64,19 @@ classdef Model < handle
         function envInit(obj)
             obj.env.tol = 1e-10;
             obj.env.minCons = 1e-5;
-            obj.env.T = 40;
+            obj.env.T = 20;
             obj.env.tretire = obj.env.T + 1;
-            obj.env.r = 0.01;
+            obj.env.r = 0.015;
             obj.env.beta = 0.98;
             obj.env.gamma = 1.5;
             obj.env.mu = 0;                     % Log income
             obj.env.rho = 0.75;
-            obj.env.sigma = 0.25;
+            obj.env.sigma = 0.0001;
             obj.env.truncAt = 3;
             obj.env.startA = 0;
-            obj.env.numPointsA = 20;
+            obj.env.numPointsA = 8;
             obj.env.interpMethod = 'pchip';     % Previously I had 'linear' but this gave very misleading simulations
-            obj.env.numPointsY = 8;
-            obj.env.hcIncome = [0.1, 0.9]';
-            obj.env.hcIncPDF = [0.5, 0.5]';
+            obj.env.numPointsY = 7;
             obj.YgridInit();
             obj.env.borrowingAllowed = 1;
             obj.AgridInit();
@@ -108,23 +106,6 @@ classdef Model < handle
         end
         
         % Function to populate income grid
-        function YgridInitOld(obj)
-            obj.env.Ygrid = repmat(obj.env.hcIncome', obj.env.T, 1);
-            obj.env.Ymin = min(obj.env.Ygrid, [], 2);
-            obj.env.Ymax = max(obj.env.Ygrid, [], 2);
-            obj.env.Q = repmat(obj.env.hcIncPDF', [obj.env.numPointsY, 1]);
-            if (obj.env.tretire <= 0)
-                obj.env.Ygrid(:,:) = 0;
-                obj.env.Ymin(:,:) = 0;
-                obj.env.Ymax(:,:) = 0;
-            elseif ((obj.env.tretire > 0) && (obj.env.tretire <= obj.env.T))
-                obj.env.Ygrid(obj.env.tretire:obj.env.T,:) = 0;
-                obj.env.Ymin(obj.env.tretire:obj.env.T,:) = 0;
-                obj.env.Ymax(obj.env.tretire:obj.env.T,:) = 0;
-            end
-        end
-        
-        % Function to populate income grid
         function YgridInit(obj)
             
             % Process is lny = rho*lny_1 + (1-rho)*mu + epsilon
@@ -144,23 +125,19 @@ classdef Model < handle
             lnYbounds(1,1) = obj.env.mu - (obj.env.truncAt*sigmalny);
             lnYbounds(obj.env.numPointsY+1, 1) = obj.env.mu + (obj.env.truncAt*sigmalny);
             
-            % Find how much is excluded by truncation
-            probAtLB = normcdf(lnYbounds(1, 1), obj.env.mu, sigmalny);
-            probIn = normcdf(lnYbounds(obj.env.numPointsY+1, 1), obj.env.mu, sigmalny) - probAtLB;
-            
             % Set the other bounds by splitting distribution into equal
-            % probability areas
+            % probability areas ignoring the truncation
             for ixY = 2:1:obj.env.numPointsY
-                lnYbounds(ixY,1) = norminv(probAtLB + probIn*(ixY-1)/obj.env.numPointsY, obj.env.mu, sigmalny);
+                lnYbounds(ixY,1) = norminv((ixY-1)/obj.env.numPointsY, obj.env.mu, sigmalny);
             end
 
             % Find the N expected values between the boundary points
-            % Calculate integral of x*pdf(x) between ixY_1 and ixY
-            % fun is rescaled by numPointsY/probIn because expected value
-            % is conditional on being in between lower and upper bounds
-            fun = @(x) x .* normpdf(x,obj.env.mu,sigmalny) .* obj.env.numPointsY ./ probIn;
+            % This formula is just copied from Cormac. I don't completely
+            % understand it
             for ixY = 1:1:obj.env.numPointsY
-                lnY(ixY,1) = integral(fun, lnYbounds(ixY,1), lnYbounds(ixY+1,1));
+                pdf0 = normpdf((lnYbounds(ixY,1) - obj.env.mu) / sigmalny);
+                pdf1 = normpdf((lnYbounds(ixY+1,1) - obj.env.mu) / sigmalny);
+                lnY(ixY,1) = obj.env.numPointsY .* sigmalny .* (pdf0 - pdf1) + obj.env.mu;
             end
 
             % Find the probability of transitioning between different
@@ -172,6 +149,8 @@ classdef Model < handle
                     maxDraw = lnYbounds(ixj+1,1) - (1-obj.env.rho)*obj.env.mu - obj.env.rho*lnY(ixi,1);
                     obj.env.Q(ixi,ixj) = normcdf(maxDraw/obj.env.sigma) - normcdf(minDraw/obj.env.sigma);
                 end
+                % We need the next line to ensure probabilities sum to one
+                % (which they won't exactly because of truncation)
                 obj.env.Q(ixi,:) = obj.env.Q(ixi,:) ./ sum(obj.env.Q(ixi,:));
             end
             
@@ -191,7 +170,7 @@ classdef Model < handle
                 obj.env.Ymax(obj.env.tretire:obj.env.T,:) = 0;
             end
 
-            if (min(obj.env.Ygrid(:,1)) < 1e-4) || (max(obj.env.Ygrid(:,numPointsY)) > 1e5)
+            if (min(obj.env.Ygrid(:,1)) < 1e-4) || (max(obj.env.Ygrid(:,obj.env.numPointsY)) > 1e5)
                 warning('Combination of sigma and rho give a very high income variance. Numerical instability possible')
             end
 
@@ -219,17 +198,23 @@ classdef Model < handle
             
             % Asset points in between
             for ixt = 1:obj.env.T+1
-                %Agrid(ixt, :) = logspace(Agrid(ixt, 1), Agrid(ixt, obj.env.numPointsA), obj.env.numPointsA);
-                % Next lines implement 3 log steps for comparison with
-                % Cormac's code
                 span = obj.env.Agrid(ixt, obj.env.numPointsA) - obj.env.Agrid(ixt, 1);
+                  
+%                 % Equal steps
+%                 grid = linspace(0, span, GridPoints);
+  
+%                 % 1 log step
+%                 loggrid = linspace(log(1), log(1+span), obj.env.numPointsA);
+%                 grid = exp(loggrid)-1;
+
+                % 3 log steps
                 loggrid = linspace(log(1+log(1+log(1))), log(1+log(1+log(1+span))), obj.env.numPointsA);
                 grid = exp(exp(exp(loggrid)-1)-1)-1;
-%                 % Next lines implement 5 log steps for comparison with
-%                 % Cormac's code
-%                 span = obj.env.Agrid(ixt, obj.env.numPointsA) - obj.env.Agrid(ixt, 1);
+
+%                 % 5 log steps
 %                 loggrid = linspace(log(1+log(1+log(1+log(1+log(1))))), log(1+log(1+log(1+log(1+log(1+span))))), obj.env.numPointsA);
 %                 grid = exp(exp(exp(exp(exp(loggrid)-1)-1)-1)-1)-1;
+
                 obj.env.Agrid(ixt, :) = grid + obj.env.Agrid(ixt, 1)*ones(1, obj.env.numPointsA);
 
             end
@@ -379,37 +364,72 @@ classdef Model < handle
         function simulate(obj)
             
             % Initialise arrays that will hold simulations
-            obj.sims.y = NaN(obj.env.T, obj.env.numSims);
-            obj.sims.c = NaN(obj.env.T, obj.env.numSims);
-            obj.sims.v = NaN(obj.env.T, obj.env.numSims);
-            obj.sims.a = NaN(obj.env.T+1, obj.env.numSims);
-            ixY = NaN(obj.env.T, obj.env.numSims);
+            obj.sims.y = zeros(obj.env.T, obj.env.numSims);
+            obj.sims.c = zeros(obj.env.T, obj.env.numSims);
+            obj.sims.v = zeros(obj.env.T, obj.env.numSims);
+            obj.sims.a = zeros(obj.env.T+1, obj.env.numSims);
             
-            % STEP 1: obtain path for exogenous income
-            for t = 1:1:obj.env.T
-                seed = t;
-                [obj.sims.y(t, :), ixY(t, :)] = getDiscreteDraws(obj.env.Ygrid(t, :), ...
-                    obj.env.hcIncPDF, 1, obj.env.numSims, seed);
-                if (t >= obj.env.tretire)
-                    ixY(t, :) = 1;
+            % Other arrays that will be used
+            e = NaN(obj.env.T, obj.env.numSims);
+            lny1 = NaN(1, obj.env.numSims);
+            lny = NaN(obj.env.T, obj.env.numSims);
+            
+            
+            % Find std dev (ignores the truncation)
+            sigmalny = obj.env.sigma/((1-obj.env.rho^2)^0.5);
+
+            seed = 1223424;
+            stream1 = RandStream('mt19937ar','Seed',seed);
+            RandStream.setGlobalStream(stream1);
+            reset(stream1);
+            
+            e = normrnd(0, obj.env.sigma, obj.env.T, obj.env.numSims);
+            lny1 = normrnd(obj.env.mu, sigmalny, 1, obj.env.numSims);
+
+            for s = 1:1:obj.env.numSims
+                
+                obj.sims.a(1, s) = obj.env.startA;
+                
+                for t = 1:1:obj.env.T
+                    if (t < obj.env.tretire)
+                        if (t == 1)
+                            lny(1, s) = lny1(1, s);
+                        else
+                            lny(t, s) = (1 - obj.env.rho) * obj.env.mu + obj.env.rho * lny(t-1, s) + e(t, s);
+                        end
+                        % This truncation just replaces more extreme values with
+                        % the truncation values. I'm not sure this is right.
+                        % Shouldn't you throw away more extreme values?
+                        lny(t, s) = truncate(lny(t, s), obj.env.mu - (obj.env.truncAt*sigmalny), ...
+                            obj.env.mu + (obj.env.truncAt*sigmalny));
+                        obj.sims.y(t, s) = exp(lny(t, s));
+                        % Do these 2D interpolations work OK?
+                        obj.sims.a(t+1, s) = interp2(obj.env.Agrid(t, :), obj.env.Ygrid(t, :), ...
+                            squeeze(obj.sln.policyA1(t, :, :))', obj.sims.a(t, s), obj.sims.y(t, s), 'spline');
+                        obj.sims.v(t, s) = interp2(obj.env.Agrid(t, :), obj.env.Ygrid(t, :), ...
+                            squeeze(obj.sln.value(t, :, :))', obj.sims.a(t, s), obj.sims.y(t, s), 'spline');
+                    else
+                        obj.sims.y(t, s) = 0;
+                        obj.sims.a(t+1, s) = interp1(obj.env.Agrid(t, :), obj.sln.policyA1(t, :, 1), ...
+                            obj.sims.a(t, s), obj.env.interpMethod, 'extrap');
+                        obj.sims.v(t, s) = interp1(obj.env.Agrid(t, :), obj.sln.value(t, :, 1), ...
+                            obj.sims.a(t, s), obj.env.interpMethod, 'extrap');
+
+                    end
+                    
+                    if ~((obj.sims.a(t+1, s) >= obj.env.Agrid(t+1, 1)) & (obj.sims.a(t+1, s) <= obj.env.Agrid(t+1, obj.env.numPointsA)))
+                        error('Next-period assets outside the grid');
+                    end
+                    
+                    obj.sims.c(t, s) = obj.sims.a(t, s)  + obj.sims.y(t, s) - (obj.sims.a(t+1, s)/(1+obj.env.r));
+                    
                 end
+                
             end
             
-            % STEP 2: simulate endogenous outcomes
-            for s = 1:1:obj.env.numSims
-                obj.sims.a(1, s) = obj.env.startA;
-                for t = 1:1:obj.env.T
-                    obj.sims.a(t+1, s) = interp1(obj.env.Agrid(t, :), obj.sln.policyA1(t, :, ixY(t, s)), ...
-                        obj.sims.a(t, s), obj.env.interpMethod, 'extrap');
-                    obj.sims.c(t, s) = obj.sims.a(t, s) + obj.sims.y(t, s) - ...
-                        (obj.sims.a(t+1, s) / (1 + obj.env.r));
-                    obj.sims.v(t, s) = interp1(obj.env.Agrid(t, :), obj.sln.value(t, :, ixY(t, s)), ...
-                        obj.sims.a(t, s), obj.env.interpMethod, 'extrap');
-                end % t
-            end % s
-            
         end
-        
+
+
         
         
         % Plot analytical and numerical consumption policy functions
